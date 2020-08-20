@@ -1755,9 +1755,9 @@ struct ImGuiContext
     ImVec2                  NavWindowingAccumDeltaSize;
 
     // Range-Select/Multi-Select
-    bool                    MultiSelectEnabled;
+    ImGuiWindow*            MultiSelectEnabledWindow;           // FIXME-MULTISELECT: We currently don't support recursing/stacking multi-select
     ImGuiMultiSelectFlags   MultiSelectFlags;
-    ImGuiMultiSelectState   MultiSelectState;                   // We currently don't support recursing/stacking multi-select
+    ImGuiMultiSelectState   MultiSelectState;
     ImGuiModFlags           MultiSelectKeyMods;
 
     // Render
@@ -1962,7 +1962,7 @@ struct ImGuiContext
         NavWindowingTimer = NavWindowingHighlightAlpha = 0.0f;
         NavWindowingToggleLayer = false;
 
-        MultiSelectEnabled = false;
+        MultiSelectEnabledWindow = NULL;
         MultiSelectFlags = ImGuiMultiSelectFlags_None;
         MultiSelectKeyMods = ImGuiModFlags_None;
 
