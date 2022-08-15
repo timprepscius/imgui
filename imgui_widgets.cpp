@@ -27,6 +27,11 @@ Index of this file:
 // [SECTION] Widgets: Columns, BeginColumns, EndColumns, etc.
 
 */
+#include <string>
+#include <sstream>
+#include <vector>
+#include <algorithm>
+using namespace std;
 
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
@@ -3426,9 +3431,9 @@ bool ImGui::InputText(const char* label, char* buf, size_t buf_size, ImGuiInputT
     return InputTextEx(label, NULL, buf, (int)buf_size, ImVec2(0, 0), flags, callback, user_data);
 }
 
-bool ImGui::InputTextMultiline(const char* label, char* buf, size_t buf_size, const ImVec2& size, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data)
+bool ImGui::InputTextMultiline(const char* label, char* buf, size_t buf_size, const ImVec2& size, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data, bool wrap_text , bool* init)
 {
-    return InputTextEx(label, NULL, buf, (int)buf_size, size, flags | ImGuiInputTextFlags_Multiline, callback, user_data);
+    return InputTextEx(label, NULL, buf, (int)buf_size, size, flags | ImGuiInputTextFlags_Multiline, callback, user_data, wrap_text, init);
 }
 
 bool ImGui::InputTextWithHint(const char* label, const char* hint, char* buf, size_t buf_size, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data)
@@ -3619,8 +3624,112 @@ static void stb_textedit_replace(STB_TEXTEDIT_STRING* str, STB_TexteditState* st
 
 } // namespace ImStb
 
+// From input text cursor to string cursor
+static int get_string_pos_of_cursor(const char *input, int pos) {
+    int real_pos = 0;
+    if (input != NULL) {
+        int len = strlen(input);
+        for (int i = 0; i < pos; i++) {
+            if (input[i] != '\v') {
+                real_pos++;
+            }
+        }
+    }
+    return real_pos;
+}
+
+static char *multiline_remove_vertical_tab(char *str_input) {
+    int len = strlen(str_input);
+    char *res = (char *) IM_ALLOC((len+1) * sizeof(char));
+    int offs = 0;
+    for (int i = 0; i < len; i++) {
+        if (str_input[i] != '\v') {
+            res[offs++] = str_input[i];
+        }
+    }
+    res[offs] = 0;
+    return res;
+}
+
+static void update_buffer_remove_vertical_tab(ImGuiInputTextState *state, char* buf) {
+    const char *buf_end = NULL;
+    char *buf_tmp = multiline_remove_vertical_tab(buf);
+    state->CurLenW = ImTextStrFromUtf8(state->TextW.Data, state->TextW.Size, buf_tmp, NULL, &buf_end);
+    state->TextA.resize(state->TextW.Size * 4 + 1);
+    state->CurLenA = ImTextStrToUtf8(state->TextA.Data, state->TextA.Size, state->TextW.Data, NULL);
+    IM_FREE(buf_tmp);
+}
+
+// From string cursor to input text cursor
+static int get_input_text_pos_of_cursor(const char *input, int pos) {
+    int real_pos = 0;
+    int iteration_pos = 0;
+    if (input != NULL) {
+        int len = strlen(input);
+        for (int i = 0; i < len; i++) {
+            if (iteration_pos == pos) {
+                real_pos = i;
+                break;
+            } else if (i == len - 1) {
+                real_pos = len;
+            }
+            if (input[i] != '\v') {
+                iteration_pos++;
+            }
+        }
+    }
+    return real_pos;
+}
+
+static void update_buffers_for_edit(ImGuiInputTextState* state) {
+    // We need to save positions of start selection, end selection and cursor
+    // Actually we have a string with fake \n, so positions related to final buffer would be wrong
+    // So we transform fake \n to \v in order to have same length of the string and manage positions
+    const char *buf_end = NULL;
+    state->CurLenW = ImTextStrFromUtf8(state->TextW.Data, state->TextW.Size, state->MultilineWrapVtTextPtr, NULL, &buf_end);
+    state->TextA.resize(state->TextW.Size * 4 + 1);
+    state->CurLenA = ImTextStrToUtf8(state->TextA.Data, state->TextA.Size, state->TextW.Data, NULL);
+
+    int curPos = get_string_pos_of_cursor(state->TextA.Data, state->Stb.cursor);
+    state->Stb.cursor = curPos;
+
+    if (state->HasSelection()) {
+        int start_selection = get_string_pos_of_cursor(state->TextA.Data, state->Stb.select_start);
+        int end_selection = get_string_pos_of_cursor(state->TextA.Data, state->Stb.select_end);
+        state->Stb.select_start = start_selection;
+        state->Stb.select_end = end_selection;
+    }
+
+    // And now we can remove \v too: we will have the clean string until next wrap-computation
+    state->TextW.resize(state->MultilineWrapOriginalBufSize + 1);
+    update_buffer_remove_vertical_tab(state, state->TextA.Data);
+}
+
 void ImGuiInputTextState::OnKeyPressed(int key)
 {
+    if (this->MultilineWrapText) {
+        switch (key) {
+            case STB_TEXTEDIT_K_LINESTART:
+            case STB_TEXTEDIT_K_LINEEND:
+            case STB_TEXTEDIT_K_UP:
+            case STB_TEXTEDIT_K_UP | STB_TEXTEDIT_K_SHIFT:
+            case STB_TEXTEDIT_K_DOWN:
+            case STB_TEXTEDIT_K_DOWN | STB_TEXTEDIT_K_SHIFT:
+            case STB_TEXTEDIT_K_LEFT:
+            case STB_TEXTEDIT_K_LEFT | STB_TEXTEDIT_K_SHIFT:
+            case STB_TEXTEDIT_K_RIGHT:
+            case STB_TEXTEDIT_K_RIGHT | STB_TEXTEDIT_K_SHIFT:
+                break;
+            default:
+                if (!this->MultilineWrapBufferOkForEdit) {
+                    // We have one or more keyPress to manage. We save cursor positions and then replace buffer with clean buffer (= without fake \n)
+                    // So we will normally edit on it
+                    update_buffers_for_edit(this);
+                    this->MultilineWrapBufferOkForEdit = true;
+                }
+                break;
+        }
+    }
     stb_textedit_key(this, &Stb, key);
     CursorFollow = true;
     CursorAnimReset();
@@ -3766,6 +3875,163 @@ static bool InputTextFilterCharacter(unsigned int* p_char, ImGuiInputTextFlags f
     return true;
 }
 
+static vector<std::string> split_multiline(const char *str, const char *delimiter) {
+    vector<string> res;
+    ostringstream oss;
+    bool new_string_started = false;
+    char *p = (char *) str;
+    for (int i = 0; i < strlen(str); i++) {
+        if (*p != '\v' && *p != '\r') {
+            if (!strcmp(delimiter, "") || *p == delimiter[0]) {
+                if (new_string_started) {
+                    string newStr = oss.str();
+                    res.push_back(newStr);
+                    new_string_started = false;
+                }
+                char deli[2];
+                deli[0] = *p;
+                deli[1] = 0;
+                string newStr = deli;
+                res.push_back(newStr);
+                oss.str("");
+                oss.clear();
+            } else {
+                if (!new_string_started) {
+                    oss.str("");
+                    oss.clear();
+                    new_string_started = true;
+                }
+                oss << *p;
+            }
+        }
+        p++;
+    }
+    if (new_string_started) {
+        string newStr = oss.str();
+        res.push_back(newStr);
+    }
+
+    return res;
+}
+
+static char *get_vector_string_multiline(string input, int size, const char *cr = "\v") {
+    vector<string> res;
+    string remaining_str = input;
+    vector<std::string> delimiters;
+    delimiters.push_back(" ");
+    delimiters.push_back("");
+    bool is_first = true;
+    while (remaining_str.length() > 0) {
+        bool sizeok = false;
+        for (int q = 0; q < 2; q++) {
+            vector<string> vec_space = split_multiline(remaining_str.c_str(), delimiters[q].c_str());
+            int max = vec_space.size();
+            string test_string;
+
+            while (max > 0) {
+                test_string = "";
+                for (int i = 0; i < max; i++) {
+                    test_string.append(vec_space[i]);
+                }
+                sizeok = ImGui::CalcTextSize(test_string.c_str(), NULL, true).x <= size;
+                if (!sizeok && max == 1 && q == 1) {
+                    sizeok = true;
+                }
+                if (!sizeok) {
+                    max--;
+                } else {
+                    string test_string_2;
+                    test_string_2.append(is_first ? "" : cr).append(test_string);
+                    is_first = false;
+                    res.push_back(test_string_2);
+                    int test_string_len = test_string.length();
+                    int rem_string_len = remaining_str.length();
+                    if (test_string_len < rem_string_len) {
+                        remaining_str = remaining_str.substr(test_string.length());
+                    } else {
+                        remaining_str = "";
+                    }
+                    break;
+                }
+            }
+            if (sizeok) {
+                break;
+            }
+        }
+
+    }
+    string resu;
+    for (int i = 0; i < res.size(); i++) {
+        resu.append(res[i]);
+    }
+    return strdup(resu.c_str());
+}
+
+static char *wrap_multiline_string_by_size(char *str_input, int size, const char *cr = "\v") {
+    ostringstream ss;
+    vector<std::string> vec_carriage_ret = split_multiline(str_input, "\n");
+    for (int i = 0; i < vec_carriage_ret.size(); i++) {
+        string act_string_splitted_cr = vec_carriage_ret.at(i);
+        if (!act_string_splitted_cr.compare("\n")) {
+            ss << act_string_splitted_cr;
+        } else {
+            char *act_string_splitted_space = get_vector_string_multiline(act_string_splitted_cr, size, cr);
+            ss << act_string_splitted_space;
+            free(act_string_splitted_space);
+        }
+    }
+    return strdup(ss.str().c_str());
+}
+
+static void init_buf_display(ImGuiWindow *window, char *buf, int pixel_size) {
+
+    if (window->MultilineWrapVtText != NULL) {
+        IM_FREE(window->MultilineWrapVtText);
+    }
+
+    char *buf_cr = wrap_multiline_string_by_size(buf, pixel_size, "\v");
+    int len = strlen(buf_cr);
+    window->MultilineWrapVtText = (char *) IM_ALLOC((len * 4 + 1) * sizeof(char));
+    strcpy(window->MultilineWrapVtText, buf_cr);
+
+    string s = buf_cr;
+    std::replace(s.begin(), s.end(), '\v', '\n');
+
+    if (window->MultilineWrapStringDisplay != NULL) {
+        IM_FREE(window->MultilineWrapStringDisplay);
+    }
+    window->MultilineWrapStringDisplay = (char *) IM_ALLOC((len * 4 + 1) * sizeof(char));
+    strcpy(window->MultilineWrapStringDisplay, s.c_str());
+
+    free(buf_cr);
+}
+
+static void manage_multiline_key_press(ImGuiInputTextState *state, int key, int k_mask, bool ignore_key = false) {
+    int start;
+    if (!state->HasSelection()) {
+        start = state->Stb.cursor;
+    } else {
+        start = state->Stb.select_start;
+    }
+    state->ClearSelection();
+    if (!ignore_key) {
+        state->OnKeyPressed(key);
+    }
+
+    if (k_mask == STB_TEXTEDIT_K_SHIFT) {
+        state->Stb.select_start = start;
+        state->Stb.select_end = state->Stb.cursor;
+    }
+}
+
+const void save_multiline_wrap_positions(ImGuiInputTextState *state, const char *buf, bool buf_has_vt) {
+    state->MultilineWrapForceComputation = true;
+    state->MultilineWrapBackupCursorPos = buf_has_vt ? get_string_pos_of_cursor(buf, state->Stb.cursor) : state->Stb.cursor;
+    state->MultilineWrapBackupStartSelection = buf_has_vt ? get_string_pos_of_cursor(buf, state->Stb.select_start) : state->Stb.select_start;
+    state->MultilineWrapBackupEndSelection = buf_has_vt ? get_string_pos_of_cursor(buf, state->Stb.select_end) : state->Stb.select_end;
+}
+
+#define MULTILINE_WRAP_MAX_FAKE_CR 100
 // Edit a string of text
 // - buf_size account for the zero-terminator, so a buf_size of 6 can hold "Hello" but not "Hello!".
 //   This is so we can easily call InputText() on static arrays using ARRAYSIZE() and to match
@@ -3774,13 +4040,13 @@ static bool InputTextFilterCharacter(unsigned int* p_char, ImGuiInputTextFlags f
 // - If you want to use ImGui::InputText() with std::string, see misc/cpp/imgui_stdlib.h
 // (FIXME: Rather confusing and messy function, among the worse part of our codebase, expecting to rewrite a V2 at some point.. Partly because we are
 //  doing UTF8 > U16 > UTF8 conversions on the go to easily interface with stb_textedit. Ideally should stay in UTF-8 all the time. See https://github.com/nothings/stb/issues/188)
-bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_size, const ImVec2& size_arg, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* callback_user_data)
+bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int original_buf_size, const ImVec2& size_arg, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* callback_user_data, bool multiline_wrap_text, bool* multiline_init)
 {
     ImGuiWindow* window = GetCurrentWindow();
     if (window->SkipItems)
         return false;
 
-    IM_ASSERT(buf != NULL && buf_size >= 0);
+    IM_ASSERT(buf != NULL && original_buf_size >= 0);
     IM_ASSERT(!((flags & ImGuiInputTextFlags_CallbackHistory) && (flags & ImGuiInputTextFlags_Multiline)));        // Can't use both together (they both use up/down keys)
     IM_ASSERT(!((flags & ImGuiInputTextFlags_CallbackCompletion) && (flags & ImGuiInputTextFlags_AllowTabInput))); // Can't use both together (they both use tab key)
 
@@ -3865,6 +4131,45 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
 
     const bool init_make_active = (focus_requested || user_clicked || user_scroll_finish || user_nav_input_start);
     const bool init_state = (init_make_active || user_scroll_active);
+
+    bool is_multiline_wrap_text = is_multiline && multiline_wrap_text;
+    bool is_multiline_init = multiline_init && *multiline_init && is_multiline_wrap_text;
+    if (is_multiline_init) {
+        draw_window->MultilineWrapInit = true;
+        *multiline_init = false;
+    }
+
+    int buf_size = original_buf_size;
+    int multiline_size = size_arg.x - 2 * style.FramePadding.x;
+    if (is_multiline_wrap_text) {
+        if (draw_window->ScrollbarY) {
+            multiline_size -= style.ScrollbarSize;
+            if (!draw_window->MultilineWrapLastHadScrollbar) {
+                draw_window->MultilineWrapLastWrapSize = -1;
+            }
+            draw_window->MultilineWrapLastHadScrollbar = true;
+        } else {
+            if (draw_window->MultilineWrapLastHadScrollbar) {
+                draw_window->MultilineWrapLastWrapSize = -1;
+            }
+            draw_window->MultilineWrapLastHadScrollbar = false;
+        }
+        if (draw_window->MultilineWrapInit) {
+            if (strlen(buf) > original_buf_size) {
+                buf[original_buf_size] = 0;
+            }
+            draw_window->MultilineWrapStateInit = true;
+            draw_window->MultilineWrapLastWrapSize = 0;
+            if (draw_window->ScrollbarY) {
+                draw_window->Scroll.y = 0;
+                draw_window->ScrollTarget.y = 0;
+            }
+            init_buf_display(draw_window, buf, multiline_size);
+            draw_window->MultilineWrapInit = false;
+        }
+        buf_size += MULTILINE_WRAP_MAX_FAKE_CR;
+    }
+
     if (init_state && g.ActiveId != id)
     {
         // Access state even if we don't own it yet.
@@ -3882,8 +4187,31 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         state->TextW.resize(buf_size + 1);          // wchar count <= UTF-8 count. we use +1 to make sure that .Data is always pointing to at least an empty string.
         state->TextA.resize(0);
         state->TextAIsValid = false;                // TextA is not valid yet (we will display buf until then)
-        state->CurLenW = ImTextStrFromUtf8(state->TextW.Data, buf_size, buf, NULL, &buf_end);
-        state->CurLenA = (int)(buf_end - buf);      // We can't get the result from ImStrncpy() above because it is not UTF-8 aware. Here we'll cut off malformed UTF-8.
+        if (!multiline_wrap_text) {
+            state->CurLenW = ImTextStrFromUtf8(state->TextW.Data, buf_size, buf, NULL, &buf_end);
+            state->CurLenA = (int) (buf_end - buf);      // We can't get the result from ImStrncpy() above because it is not UTF-8 aware. Here we'll cut off malformed UTF-8.
+        } else {
+            state->CurLenW = ImTextStrFromUtf8(state->TextW.Data, buf_size, draw_window->MultilineWrapStringDisplay, NULL, &buf_end);
+            state->CurLenA = (int) (buf_end - draw_window->MultilineWrapStringDisplay);      // We can't get the result from ImStrncpy() above because it is not UTF-8 aware. Here we'll cut off malformed UTF-8.
+            state->MultilineWrapVtTextPtr = draw_window->MultilineWrapVtText;
+        }
+
+        if (is_multiline_wrap_text && draw_window->MultilineWrapStateInit) {
+            state->MultilineWrapForceComputation = false;
+            state->ClearSelection();
+            state->MultilineWrapBufferOkForEdit = false;
+            state->Stb.undostate.undo_point = 0;
+            state->Stb.undostate.redo_point = 0;
+            state->Stb.undostate.undo_char_point = 0;
+            state->Stb.undostate.redo_char_point = 0;
+            draw_window->MultilineWrapStateInit = false;
+        }
+
+        if (is_multiline_wrap_text) {
+            state->MultilineWrapText = true;
+        } else {
+            state->MultilineWrapText = false;
+        }
 
         // Preserve cursor position and undo/redo stack if we come back to same widget
         // FIXME: For non-readonly widgets we might be able to require that TextAIsValid && TextA == buf ? (untested) and discard undo stack if user buffer has changed.
@@ -3948,8 +4276,14 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
     {
         const char* buf_end = NULL;
         state->TextW.resize(buf_size + 1);
-        state->CurLenW = ImTextStrFromUtf8(state->TextW.Data, state->TextW.Size, buf, NULL, &buf_end);
-        state->CurLenA = (int)(buf_end - buf);
+        if (!multiline_wrap_text) {
+            state->CurLenW = ImTextStrFromUtf8(state->TextW.Data, state->TextW.Size, buf, NULL, &buf_end);
+            state->CurLenA = (int) (buf_end - buf);
+        } else {
+            state->CurLenW = ImTextStrFromUtf8(state->TextW.Data, state->TextW.Size, draw_window->MultilineWrapStringDisplay, NULL, &buf_end);
+            state->CurLenA = (int) (buf_end - draw_window->MultilineWrapStringDisplay);
+            state->MultilineWrapVtTextPtr = draw_window->MultilineWrapVtText;
+        }
         state->CursorClamp();
         render_selection &= state->HasSelection();
     }
@@ -3985,6 +4319,9 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         state->UserFlags = flags;
         state->UserCallback = callback;
         state->UserCallbackData = callback_user_data;
+        state->MultilineWrapPixelSize = multiline_size;
+        state->MultilineWrapOriginalBufSize = original_buf_size;
+        state->MultilineWrapBufferOkForEdit = false;
 
         // Although we are active we don't prevent mouse from hovering other elements unless we are interacting right now with the widget.
         // Down the line we should have a cleaner library-wide concept of Selected vs Active.
@@ -4080,14 +4417,226 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         const bool is_undo  = ((is_shortcut_key && IsKeyPressedMap(ImGuiKey_Z)) && !is_readonly && is_undoable);
         const bool is_redo  = ((is_shortcut_key && IsKeyPressedMap(ImGuiKey_Y)) || (is_osx_shift_shortcut && IsKeyPressedMap(ImGuiKey_Z))) && !is_readonly && is_undoable;
 
-        if (IsKeyPressedMap(ImGuiKey_LeftArrow))                        { state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_LINESTART : is_wordmove_key_down ? STB_TEXTEDIT_K_WORDLEFT : STB_TEXTEDIT_K_LEFT) | k_mask); }
-        else if (IsKeyPressedMap(ImGuiKey_RightArrow))                  { state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_LINEEND : is_wordmove_key_down ? STB_TEXTEDIT_K_WORDRIGHT : STB_TEXTEDIT_K_RIGHT) | k_mask); }
-        else if (IsKeyPressedMap(ImGuiKey_UpArrow) && is_multiline)     { if (io.KeyCtrl) SetScrollY(draw_window, ImMax(draw_window->Scroll.y - g.FontSize, 0.0f)); else state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_TEXTSTART : STB_TEXTEDIT_K_UP) | k_mask); }
-        else if (IsKeyPressedMap(ImGuiKey_DownArrow) && is_multiline)   { if (io.KeyCtrl) SetScrollY(draw_window, ImMin(draw_window->Scroll.y + g.FontSize, GetScrollMaxY())); else state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_TEXTEND : STB_TEXTEDIT_K_DOWN) | k_mask); }
+        if (IsKeyPressedMap(ImGuiKey_LeftArrow)) {
+            if (is_startend_key_down) {
+                state->OnKeyPressed(STB_TEXTEDIT_K_LINESTART | k_mask);
+            } else {
+                if (!is_wordmove_key_down) {
+                    state->OnKeyPressed(STB_TEXTEDIT_K_LEFT | k_mask);
+                } else {
+                    if (is_multiline_wrap_text) {
+                        int original_index = state->Stb.cursor;
+
+                        // Identify strategic initial position: find index where NEXT is not space
+                        int index = state->Stb.cursor - 1;
+                        while (index >= 0) {
+                            unsigned int ttBinary = state->TextW.Data[index];
+                            char tt = (char) ttBinary;
+                            if (tt != '\n' && tt != ' ' && tt != '\v') {
+                                break;
+                            }
+                            index--;
+                        }
+
+                        // Search beginning of the word
+                        bool found = false;
+                        while (index >= 0) {
+                            unsigned int ttBinary = state->TextW.Data[index];
+                            char tt = (char) ttBinary;
+                            unsigned int ttBinaryNext = state->TextW.Data[index + 1];
+                            char ttnext = (char) ttBinaryNext;
+
+                            // Particular case \v
+                            if (tt == '\v') {
+                                int index2 = index - 1;
+                                if (index2 >= 0) {
+                                    unsigned int ttPreviousBinary = state->TextW.Data[index2];
+                                    char ttprevious = (char) ttPreviousBinary;
+                                    if (ttprevious == ' ' || ttprevious == '\n') {
+                                        // In this case \v is like a space or a \n
+                                        tt = ' ';
+                                    }
+                                }
+                            }
+                            if ((tt == '\n' || tt == ' ') && (ttnext != '\n' && ttnext != ' ' && ttnext != '\v')) {
+                                found = true;
+                                break;
+                            }
+                            index--;
+                        }
+
+                        // Test particular case: first character
+                        if (!found && index == -1 && state->CurLenW > 0) {
+                             found = true;
+                        }
+
+                        if (found) {
+                            int len = original_index - index - 1;
+                            manage_multiline_key_press(state, 0, k_mask, true);
+                            state->Stb.cursor-= len;
+                            if (k_mask == STB_TEXTEDIT_K_SHIFT) {
+                                state->Stb.select_end = state->Stb.cursor;
+                            }
+                        }
+                    } else {
+                        state->OnKeyPressed(STB_TEXTEDIT_K_WORDLEFT | k_mask);
+                    }
+                }
+            }
+        }
+        else if (IsKeyPressedMap(ImGuiKey_RightArrow)) {
+            if (is_startend_key_down) {
+                state->OnKeyPressed(STB_TEXTEDIT_K_LINEEND | k_mask);
+            } else {
+                if (!is_wordmove_key_down) {
+                    state->OnKeyPressed(STB_TEXTEDIT_K_RIGHT | k_mask);
+                } else {
+                    if (is_multiline_wrap_text) {
+                        int original_index = state->Stb.cursor;
+
+                        // Identify strategic initial position: find index where NEXT is space
+                        int index = state->Stb.cursor;
+                        while (index < state->CurLenW) {
+                            unsigned int ttBinary = state->TextW.Data[index];
+                            char tt = (char) ttBinary;
+                            // Particular case \v
+                            if (tt == '\v') {
+                                int index2 = index - 1;
+                                if (index2 >= 0) {
+                                    unsigned int ttPreviousBinary = state->TextW.Data[index2];
+                                    char ttprevious = (char) ttPreviousBinary;
+                                    if (ttprevious == ' ' || ttprevious == '\n') {
+                                        // In this case \v is like a space or a \n
+                                        tt = ' ';
+                                    }
+                                }
+                            }
+                            if (tt == '\n' || tt == ' ') {
+                                break;
+                            }
+                            index++;
+                        }
+
+                        // Search beginning of the word
+                        bool found = false;
+                        while (index < state->CurLenW) {
+                            unsigned int ttBinary = state->TextW.Data[index];
+                            char tt = (char) ttBinary;
+                            unsigned int ttBinaryPrevious = state->TextW.Data[index - 1];
+                            char ttprevious = (char) ttBinaryPrevious;
+
+                            // Particular case \v
+                            if (ttprevious == '\v') {
+                                int index2 = index - 2;
+                                if (index2 >= 0) {
+                                    unsigned int ttPreviousPreviousBinary = state->TextW.Data[index2];
+                                    char ttpreviousprevious = (char) ttPreviousPreviousBinary;
+                                    if (ttpreviousprevious == ' ' || ttpreviousprevious == '\n') {
+                                        // In this case \v is like a space or a \n
+                                        ttprevious = ' ';
+                                    }
+                                }
+                            }
+                            if ((ttprevious == '\n' || ttprevious == ' ') && (tt != '\n' && tt != ' ' && tt != '\v')) {
+                                found = true;
+                                break;
+                            }
+                            index++;
+                        }
+
+                        // Test particular case: last character
+                        if (!found && index == state->CurLenW && state->CurLenW > 0) {
+                            found = true;
+                        }
+
+                        if (found) {
+                            int len = index - original_index;
+                            manage_multiline_key_press(state, 0, k_mask, true);
+                            state->Stb.cursor+= len;
+                            if (k_mask == STB_TEXTEDIT_K_SHIFT) {
+                                state->Stb.select_end = state->Stb.cursor;
+                            }
+                        }
+                    } else {
+                        state->OnKeyPressed(STB_TEXTEDIT_K_WORDRIGHT | k_mask);
+                    }
+                }
+            }
+        }
+        else if (IsKeyPressedMap(ImGuiKey_UpArrow) && is_multiline) {
+            if (io.KeyCtrl) {
+                SetScrollY(draw_window, ImMax(draw_window->Scroll.y - g.FontSize, 0.0f));
+            } else {
+                if (!is_startend_key_down) {
+                    // Particular case
+                    // Cursor remains stuck if you came from a previous line longer than actual line
+                    if (state->Stb.cursor == state->CurLenW) {
+                        int old_pos = state->Stb.cursor;
+                        state->OnKeyPressed(STB_TEXTEDIT_K_LINESTART);
+                        int new_pos = state->Stb.cursor;
+                        int diff = old_pos - new_pos;
+                        state->OnKeyPressed(STB_TEXTEDIT_K_UP);
+                        for (int i = 0; i < diff; i++) {
+                            state->OnKeyPressed(STB_TEXTEDIT_K_RIGHT);
+                            char tt = state->TextA.Data[state->Stb.cursor];
+                            if (tt == '\n' || tt == '\v') {
+                                break;
+                            }
+                        }
+                        if (k_mask == STB_TEXTEDIT_K_SHIFT) {
+                            state->Stb.select_start = state->CurLenW;
+                            state->Stb.select_end = state->Stb.cursor;
+                        }
+                    } else {
+                        if (is_multiline_wrap_text) {
+                            manage_multiline_key_press(state, STB_TEXTEDIT_K_UP, k_mask);
+                        } else {
+                            state->OnKeyPressed(STB_TEXTEDIT_K_UP | k_mask);
+                        }
+                    }
+                } else {
+                    state->OnKeyPressed(STB_TEXTEDIT_K_TEXTSTART | k_mask);
+                }
+            }
+        } 
+        else if (IsKeyPressedMap(ImGuiKey_DownArrow) && is_multiline)   {
+            if (io.KeyCtrl) SetScrollY(draw_window, ImMin(draw_window->Scroll.y + g.FontSize, GetScrollMaxY()));
+            else {
+                if (!is_startend_key_down) {
+                    if (is_multiline_wrap_text) {
+                        manage_multiline_key_press(state, STB_TEXTEDIT_K_DOWN, k_mask);
+                    } else {
+                        state->OnKeyPressed(STB_TEXTEDIT_K_DOWN | k_mask);
+                    }
+                } else {
+                    state->OnKeyPressed(STB_TEXTEDIT_K_TEXTEND | k_mask);
+                }
+            }
+        }
         else if (IsKeyPressedMap(ImGuiKey_PageUp) && is_multiline)      { state->OnKeyPressed(STB_TEXTEDIT_K_PGUP | k_mask); scroll_y -= row_count_per_page * g.FontSize; }
         else if (IsKeyPressedMap(ImGuiKey_PageDown) && is_multiline)    { state->OnKeyPressed(STB_TEXTEDIT_K_PGDOWN | k_mask); scroll_y += row_count_per_page * g.FontSize; }
-        else if (IsKeyPressedMap(ImGuiKey_Home))                        { state->OnKeyPressed(io.KeyCtrl ? STB_TEXTEDIT_K_TEXTSTART | k_mask : STB_TEXTEDIT_K_LINESTART | k_mask); }
-        else if (IsKeyPressedMap(ImGuiKey_End))                         { state->OnKeyPressed(io.KeyCtrl ? STB_TEXTEDIT_K_TEXTEND | k_mask : STB_TEXTEDIT_K_LINEEND | k_mask); }
+        else if (IsKeyPressedMap(ImGuiKey_Home)) {
+            if (io.KeyCtrl) {
+                state->OnKeyPressed(STB_TEXTEDIT_K_TEXTSTART | k_mask);
+            } else {
+                if (is_multiline_wrap_text) {
+                    manage_multiline_key_press(state, STB_TEXTEDIT_K_LINESTART, k_mask);
+                } else {
+                    state->OnKeyPressed(STB_TEXTEDIT_K_LINESTART | k_mask);
+                }
+            }
+        }
+        else if (IsKeyPressedMap(ImGuiKey_End)) {
+            if (io.KeyCtrl) {
+                state->OnKeyPressed(STB_TEXTEDIT_K_TEXTEND | k_mask);
+            } else {
+                if (is_multiline_wrap_text) {
+                    manage_multiline_key_press(state, STB_TEXTEDIT_K_LINEEND, k_mask);
+                } else {
+                    state->OnKeyPressed(STB_TEXTEDIT_K_LINEEND | k_mask);
+                }
+            }
+        }
         else if (IsKeyPressedMap(ImGuiKey_Delete) && !is_readonly)      { state->OnKeyPressed(STB_TEXTEDIT_K_DELETE | k_mask); }
         else if (IsKeyPressedMap(ImGuiKey_Backspace) && !is_readonly)
         {
@@ -4133,6 +4682,10 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
             // Cut, Copy
             if (io.SetClipboardTextFn)
             {
+                if (is_multiline_wrap_text) {
+                    update_buffers_for_edit(state);
+                    save_multiline_wrap_positions(state, buf, false);
+                }
                 const int ib = state->HasSelection() ? ImMin(state->Stb.select_start, state->Stb.select_end) : 0;
                 const int ie = state->HasSelection() ? ImMax(state->Stb.select_start, state->Stb.select_end) : state->CurLenW;
                 const int clipboard_data_len = ImTextCountUtf8BytesFromStr(state->TextW.Data + ib, state->TextW.Data + ie) + 1;
@@ -4153,6 +4706,10 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         {
             if (const char* clipboard = GetClipboardText())
             {
+                if (is_multiline_wrap_text) {
+                    update_buffers_for_edit(state);
+                    save_multiline_wrap_positions(state, buf, false);
+                }
                 // Filter pasted buffer
                 const int clipboard_len = (int)strlen(clipboard);
                 ImWchar* clipboard_filtered = (ImWchar*)IM_ALLOC((clipboard_len + 1) * sizeof(ImWchar));
@@ -4297,10 +4854,23 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
             }
 
             // Will copy result string if modified
-            if (!is_readonly && strcmp(state->TextA.Data, buf) != 0)
+            char* tst = (multiline_wrap_text? draw_window->MultilineWrapStringDisplay : buf);
+            if (!is_readonly && strcmp(state->TextA.Data, tst) != 0)
             {
-                apply_new_text = state->TextA.Data;
-                apply_new_text_length = state->CurLenA;
+                bool update = true;
+                if (multiline_wrap_text) {
+                    int len = strlen(state->TextA.Data);
+                    if (len == buf_size-1) {
+                        if (strncmp(state->TextA.Data, tst, buf_size-1) == 0) {
+                            strcpy(draw_window->MultilineWrapStringDisplay, state->TextA.Data);
+                            update = false;
+                        }
+                    }
+                }
+                if (update) {
+                    apply_new_text = state->TextA.Data;
+                    apply_new_text_length = state->CurLenA;
+                }
             }
         }
 
@@ -4330,6 +4900,9 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
 
             // If the underlying buffer resize was denied or not carried to the next frame, apply_new_text_length+1 may be >= buf_size.
             ImStrncpy(buf, apply_new_text, ImMin(apply_new_text_length + 1, buf_size));
+            if (multiline_wrap_text) {
+                save_multiline_wrap_positions(state, buf, false);
+            }
             value_changed = true;
         }
 
@@ -4337,6 +4910,59 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         state->UserFlags = 0;
         state->UserCallback = NULL;
         state->UserCallbackData = NULL;
+    }
+
+    if (is_multiline_wrap_text) {
+        bool size_changed = draw_window->Size.x != draw_window->MultilineWrapLastWrapSize;
+        if (state) {
+            bool force_wrap_computation = state->MultilineWrapForceComputation;
+            if (size_changed) {
+                // Saving cursor positions
+                save_multiline_wrap_positions(state, state->MultilineWrapVtTextPtr, true);
+            }
+            force_wrap_computation |= size_changed;
+            if (force_wrap_computation) {
+                // Here we are: recompute new display string/bytes starting from buf, which is updated
+
+                state->ScrollX = 0.0f;
+
+                // We have cursor position and selection positions related to a 'clean' (= without fake \n and without \v) buffer
+                // we need to translate them to new 'dirty' (= with fake \n) string
+                // but we have to make an intermediate step, create a string with "\v"
+                init_buf_display(draw_window, buf, multiline_size);
+                state->MultilineWrapVtTextPtr = draw_window->MultilineWrapVtText;
+
+                // Cursor position in NEW display buffer
+                int new_cursor_pos = get_input_text_pos_of_cursor(draw_window->MultilineWrapVtText, state->MultilineWrapBackupCursorPos);
+
+                state->Stb.cursor = new_cursor_pos;
+                if (state->HasSelection()) {
+                    int new_start_selection = get_input_text_pos_of_cursor(draw_window->MultilineWrapVtText, state->MultilineWrapBackupStartSelection);
+                    int new_end_selection = get_input_text_pos_of_cursor(draw_window->MultilineWrapVtText, state->MultilineWrapBackupEndSelection);
+                    state->Stb.select_start = new_start_selection;
+                    state->Stb.select_end = new_end_selection;
+                }
+
+                // All is up to date now: we can replace \v with fake \n and create new TextW and TextA
+                const char *buf_end = NULL;
+                state->TextW.resize(original_buf_size + MULTILINE_WRAP_MAX_FAKE_CR);
+                state->CurLenW = ImTextStrFromUtf8(state->TextW.Data, state->TextW.Size, draw_window->MultilineWrapStringDisplay, NULL, &buf_end);
+                state->TextA.resize(state->TextW.Size * 4 + 1);
+                state->CurLenA = ImTextStrToUtf8(state->TextA.Data, state->TextA.Size, state->TextW.Data, NULL);
+
+                if (size_changed) {
+                    state->CursorFollow = true;
+                }
+
+                state->MultilineWrapForceComputation = false;
+                draw_window->MultilineWrapLastWrapSize = draw_window->Size.x;
+            }
+        } else {
+            if (size_changed) {
+                init_buf_display(draw_window, buf, multiline_size);
+                draw_window->MultilineWrapLastWrapSize = draw_window->Size.x;
+            }
+        }
     }
 
     // Release active ID at the end of the function (so e.g. pressing Return still does a final application of the value)
@@ -4358,7 +4984,7 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
     // without any carriage return, which would makes ImFont::RenderText() reserve too many vertices and probably crash. Avoid it altogether.
     // Note that we only use this limit on single-line InputText(), so a pathologically large line on a InputTextMultiline() would still crash.
     const int buf_display_max_length = 2 * 1024 * 1024;
-    const char* buf_display = buf_display_from_state ? state->TextA.Data : buf; //-V595
+    const char* buf_display = ((is_multiline_wrap_text) ? draw_window->MultilineWrapStringDisplay : (buf_display_from_state ? state->TextA.Data : buf)); //-V595
     const char* buf_display_end = NULL; // We have specialized paths below for setting the length
     if (is_displaying_hint)
     {

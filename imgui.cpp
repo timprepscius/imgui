@@ -2849,6 +2849,16 @@ ImGuiWindow::~ImGuiWindow()
     IM_DELETE(Name);
     for (int i = 0; i != ColumnsStorage.Size; i++)
         ColumnsStorage[i].~ImGuiColumns();
+
+    if (MultilineWrapStringDisplay != NULL) {
+        IM_FREE(MultilineWrapStringDisplay);
+    }
+    MultilineWrapStringDisplay = NULL;
+
+    if (MultilineWrapVtText != NULL) {
+    IM_FREE(MultilineWrapVtText);
+    }
+    MultilineWrapVtText = NULL;
 }
 
 ImGuiID ImGuiWindow::GetID(const char* str, const char* str_end)
