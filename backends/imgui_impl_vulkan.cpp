@@ -472,11 +472,30 @@ void ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer comm
         check_vk_result(err);
         err = vkMapMemory(v->Device, rb->IndexBufferMemory, 0, rb->IndexBufferSize, 0, (void**)(&idx_dst));
         check_vk_result(err);
+        
+        // TJP: we need to keep track of offsets, and "pre-offset" indices
+        size_t vtxOffset = 0;
+        
+        ImGuiIO& io = ImGui::GetIO();
         for (int n = 0; n < draw_data->CmdListsCount; n++)
         {
             const ImDrawList* cmd_list = draw_data->CmdLists[n];
             memcpy(vtx_dst, cmd_list->VtxBuffer.Data, cmd_list->VtxBuffer.Size * sizeof(ImDrawVert));
             memcpy(idx_dst, cmd_list->IdxBuffer.Data, cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx));
+			
+			// TJP: if there is a cmd->VtxOffset, then we need to do each cmd separately,
+			// but I'm not sure if they are consolidating these, using different vertex offsets
+			// which would be weird, but not too wierd.
+			if ((io.BackendFlags & ImGuiBackendFlags_RendererHasVtxOffset) == 0)
+			{
+				ImDrawIdx addOffset = vtxOffset;
+				ImDrawIdx* p=idx_dst;
+				for (size_t i=0; i<cmd_list->IdxBuffer.Size; ++i, ++p)
+					*p += addOffset;
+
+				vtxOffset += cmd_list->VtxBuffer.Size;
+            }
+            
             vtx_dst += cmd_list->VtxBuffer.Size;
             idx_dst += cmd_list->IdxBuffer.Size;
         }
@@ -504,6 +523,7 @@ void ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer comm
     // (Because we merged all buffers into a single one, we maintain our own offset into them)
     int global_vtx_offset = 0;
     int global_idx_offset = 0;
+	ImGuiIO& io = ImGui::GetIO();
     for (int n = 0; n < draw_data->CmdListsCount; n++)
     {
         const ImDrawList* cmd_list = draw_data->CmdLists[n];
@@ -552,7 +572,15 @@ void ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer comm
                 vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bd->PipelineLayout, 0, 1, desc_set, 0, NULL);
 
                 // Draw
-                vkCmdDrawIndexed(command_buffer, pcmd->ElemCount, 1, pcmd->IdxOffset + global_idx_offset, pcmd->VtxOffset + global_vtx_offset, 0);
+                // TJP, the iPhone I'm testing on doesn't support vertex offsets
+                if ((io.BackendFlags & ImGuiBackendFlags_RendererHasVtxOffset) == 0)
+                {
+					vkCmdDrawIndexed(command_buffer, pcmd->ElemCount, 1, pcmd->IdxOffset + global_idx_offset, 0, 0);
+                }
+                else
+                {
+					vkCmdDrawIndexed(command_buffer, pcmd->ElemCount, 1, pcmd->IdxOffset + global_idx_offset, pcmd->VtxOffset + global_vtx_offset, 0);
+				}
             }
         }
         global_idx_offset += cmd_list->IdxBuffer.Size;
@@ -1035,7 +1063,9 @@ bool    ImGui_ImplVulkan_Init(ImGui_ImplVulkan_InitInfo* info, VkRenderPass rend
     ImGui_ImplVulkan_Data* bd = IM_NEW(ImGui_ImplVulkan_Data)();
     io.BackendRendererUserData = (void*)bd;
     io.BackendRendererName = "imgui_impl_vulkan";
-    io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;  // We can honor the ImDrawCmd::VtxOffset field, allowing for large meshes.
+    
+    // TJP
+    // io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;  // We can honor the ImDrawCmd::VtxOffset field, allowing for large meshes.
 
     IM_ASSERT(info->Instance != VK_NULL_HANDLE);
     IM_ASSERT(info->PhysicalDevice != VK_NULL_HANDLE);
