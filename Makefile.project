@@ -1,0 +1,18 @@
+include $(MAKEDIR)/Makefile.base
+
+INCPATH := -I . -I ../../sdk/include
+LIBFILE := libimgui.a
+#_FLAGS := -DHAVE_CONFIG_H -DBUILDING_LIBCURL -DPIC
+COPYTO := ../../sdk/lib
+
+PROJECTS := .
+
+ifneq (IOS,$(SYSNAME))
+	SRC += backends/imgui_impl_glfw.cpp
+endif
+
+FILTER_OUT_CPP := imgui_demo.cpp
+
+include $(MAKEDIR)/Makefile.lib
+
+
