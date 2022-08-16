@@ -4319,7 +4319,21 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
             // FIXME: unselect on late click could be done release?
             if (hovered)
             {
+                if (is_multiline)
+                {
+                    std::swap(state->TextR.Data, state->TextW.Data);
+                    std::swap(state->CurLenR, state->CurLenW);
+                }
+
                 stb_textedit_click(state, &state->Stb, mouse_x, mouse_y);
+
+                if (is_multiline)
+                {
+                        std::swap(state->TextR.Data, state->TextW.Data);
+                        std::swap(state->CurLenR, state->CurLenW);
+                        state->CursorClamp();
+                }
+
                 state->CursorAnimReset();
             }
         }
@@ -4338,15 +4352,21 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
             // it will add one "off" character.
             //
             // This stb_textedit_drag really just needs to be re-implemented.
-            std::swap(state->TextR.Data, state->TextW.Data);
-            std::swap(state->CurLenR, state->CurLenW);
+            if (is_multiline)
+            {
+                std::swap(state->TextR.Data, state->TextW.Data);
+                std::swap(state->CurLenR, state->CurLenW);
+            }
 
             stb_textedit_drag(state, &state->Stb, mouse_x, mouse_y);
 
-            std::swap(state->TextR.Data, state->TextW.Data);
-            std::swap(state->CurLenR, state->CurLenW);
-            state->CursorClamp();
-
+            if (is_multiline)
+            {
+                std::swap(state->TextR.Data, state->TextW.Data);
+                std::swap(state->CurLenR, state->CurLenW);
+                state->CursorClamp();
+            }
+			
             state->CursorAnimReset();
             state->CursorFollow = true;
         }
@@ -4702,17 +4722,27 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
     // Note that we only use this limit on single-line InputText(), so a pathologically large line on a InputTextMultiline() would still crash.
     const int buf_display_max_length = 2 * 1024 * 1024;
 
+	// TJP
     static ImVector<char> TextD;
-    if (render_cursor || render_selection)
+    const char* buf_display = nullptr;
+    if (is_multiline)
     {
-        ImGui_RenderMultiline(TextD, state->TextR, state->CurLenR, state->TextW, inner_size.x);
+        if (render_cursor || render_selection)
+        {
+            ImGui_RenderMultiline(TextD, state->TextR, state->CurLenR, state->TextW, inner_size.x);
+        }
+        else
+        {
+            ImGui_RenderMultiline(TextD, buf, inner_size.x);
+        }
+
+        buf_display = TextD.Data;
     }
     else
     {
-        ImGui_RenderMultiline(TextD, buf, inner_size.x);
+        buf_display = buf_display_from_state ? state->TextA.Data : buf; //-V595
     }
 
-    const char* buf_display = TextD.Data;
     const char* buf_display_end = NULL; // We have specialized paths below for setting the length
     if (is_displaying_hint)
     {
