@@ -11,7 +11,7 @@ ifneq (IOS,$(SYSNAME))
 	SRC += backends/imgui_impl_glfw.cpp
 endif
 
-FILTER_OUT_CPP := imgui_demo.cpp
+FILTER_OUT_CPP := %/imgui_demo.cpp
 
 include $(MAKEDIR)/Makefile.lib
 
