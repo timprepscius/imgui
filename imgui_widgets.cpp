@@ -48,6 +48,10 @@ Index of this file:
 #include <stdint.h>     // intptr_t
 #endif
 
+// TJP
+// for the std::swap hack!
+#include <algorithm>
+
 //-------------------------------------------------------------------------
 // Warnings
 //-------------------------------------------------------------------------
@@ -84,6 +88,12 @@ Index of this file:
 #pragma GCC diagnostic ignored "-Wclass-memaccess"                  // [__GNUC__ >= 8] warning: 'memset/memcpy' clearing/writing an object of type 'xxxx' with no trivial copy-assignment; use assignment or value-initialization instead
 #pragma GCC diagnostic ignored "-Wdeprecated-enum-enum-conversion"  // warning: bitwise operation between different enumeration types ('XXXFlags_' and 'XXXFlagsPrivate_') is deprecated
 #endif
+
+//-------------------------------------------------------------------------
+
+void ImGui_RenderMultiline(ImVector<char> &d, const char *, float maxWidth);
+void ImGui_RenderMultiline(ImVector<char> &d, ImVector<ImWchar> &r, int &rSize, ImVector<ImWchar> &w, float maxWidth);
+
 
 //-------------------------------------------------------------------------
 // Data
@@ -4315,7 +4325,28 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         }
         else if (io.MouseDown[0] && !state->SelectedAllMouseLock && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f))
         {
+            // TJP:
+            // What is going on here!?!?!  ImGui is using a hardcoded set of functions to find
+            // text and length and so and so, when interacting with STB
+            // these functions map to TextW and CurlenW.
+            // But for this stb_textedit_drag, we need to use TextR and CurlenR!!!
+            // so we are doing something very, very bad.  Bad! Bad! You know it! We swap them!
+            // I could rewrite how ImGui does text, but I really don't want to.
+            //
+            // Is this correct?  No, it is slightly incorrect.  The reason for this is that 
+            // TextR is actually longer than TextW, and each time we pass an artificial newline
+            // it will add one "off" character.
+            //
+            // This stb_textedit_drag really just needs to be re-implemented.
+            std::swap(state->TextR.Data, state->TextW.Data);
+            std::swap(state->CurLenR, state->CurLenW);
+
             stb_textedit_drag(state, &state->Stb, mouse_x, mouse_y);
+
+            std::swap(state->TextR.Data, state->TextW.Data);
+            std::swap(state->CurLenR, state->CurLenW);
+            state->CursorClamp();
+
             state->CursorAnimReset();
             state->CursorFollow = true;
         }
@@ -4670,7 +4701,18 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
     // without any carriage return, which would makes ImFont::RenderText() reserve too many vertices and probably crash. Avoid it altogether.
     // Note that we only use this limit on single-line InputText(), so a pathologically large line on a InputTextMultiline() would still crash.
     const int buf_display_max_length = 2 * 1024 * 1024;
-    const char* buf_display = buf_display_from_state ? state->TextA.Data : buf; //-V595
+
+    static ImVector<char> TextD;
+    if (render_cursor || render_selection)
+    {
+        ImGui_RenderMultiline(TextD, state->TextR, state->CurLenR, state->TextW, inner_size.x);
+    }
+    else
+    {
+        ImGui_RenderMultiline(TextD, buf, inner_size.x);
+    }
+
+    const char* buf_display = TextD.Data;
     const char* buf_display_end = NULL; // We have specialized paths below for setting the length
     if (is_displaying_hint)
     {
@@ -4693,7 +4735,11 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         // - Measure text height (for scrollbar)
         // We are attempting to do most of that in **one main pass** to minimize the computation cost (non-negligible for large amount of text) + 2nd pass for selection rendering (we could merge them by an extra refactoring effort)
         // FIXME: This should occur on buf_display but we'd need to maintain cursor/select_start/select_end for UTF-8.
-        const ImWchar* text_begin = state->TextW.Data;
+
+        // TJP:
+        // So, in the above segment, we rendered the TextW to TextR, now we use to to detect
+        // where to draw the cursor.
+        const ImWchar* text_begin = is_multiline ? state->TextR.Data : state->TextW.Data;
         ImVec2 cursor_offset, select_start_offset;
 
         {
