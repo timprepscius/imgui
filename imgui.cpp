@@ -4098,7 +4098,10 @@ static void ImGui::UpdateMouseInputs()
     io.MousePosPrev = io.MousePos;
     for (int i = 0; i < IM_ARRAYSIZE(io.MouseDown); i++)
     {
-        io.MouseClicked[i] = io.MouseDown[i] && io.MouseDownDuration[i] < 0.0f;
+        // TJP: mouse down for events, not clicked, before it would generate a click
+        // when the mouse was first pressed, but we want it when the use release the mouse
+        // io.MouseClicked[i] = io.MouseDown[i] && io.MouseDownDuration[i] < 0.0f;
+        io.MouseClicked[i] = !io.MouseDown[i] && io.MouseDownDuration[i] == 0.0f;
         io.MouseClickedCount[i] = 0; // Will be filled below
         io.MouseReleased[i] = !io.MouseDown[i] && io.MouseDownDuration[i] >= 0.0f;
         io.MouseDownDurationPrev[i] = io.MouseDownDuration[i];
@@ -4299,7 +4302,10 @@ void ImGui::UpdateHoveredWindowAndCaptureFlags()
     }
     else
     {
-        io.WantCaptureMouse = (mouse_avail && (g.HoveredWindow != NULL || mouse_any_down)) || has_open_popup;
+        // TJP: when imgui sees any mouse down it starts grabbing all of the events
+        // we don't want that
+        // io.WantCaptureMouse = (mouse_avail && (g.HoveredWindow != NULL || mouse_any_down)) || has_open_popup;
+        io.WantCaptureMouse = (mouse_avail && (g.HoveredWindow != NULL)) || has_open_popup;
         io.WantCaptureMouseUnlessPopupClose = (mouse_avail_unless_popup_close && (g.HoveredWindow != NULL || mouse_any_down)) || has_open_modal;
     }
 
