@@ -1015,6 +1015,10 @@ struct IMGUI_API ImGuiInputTextState
     // TJP
     ImVector<ImWchar>       TextR;
     int                     CurLenR;
+    
+    // TJP, I need this so I can reposition the scrolling of the containing window, so that the input
+    // text remains visible
+    ImRect                  BBox;
 
     ImVector<char>          InitialTextA;           // backup of end-user buffer at the time of focus (in UTF-8, unaltered)
     bool                    TextAIsValid;           // temporary UTF8 buffer is not initially valid before we make the widget active (until then we pull the data from user argument)

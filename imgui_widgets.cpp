@@ -4088,12 +4088,15 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         bool child_visible = BeginChildEx(label, id, frame_bb.GetSize(), true, ImGuiWindowFlags_NoMove);
         PopStyleVar(3);
         PopStyleColor();
-        if (!child_visible)
-        {
-            EndChild();
-            EndGroup();
-            return false;
-        }
+
+        // TJP: when the edit goes out of view, it loses it's active state, this causes the keyboard to
+        // recede and comeback, in my case I don't want that.
+        // if (!child_visible)
+        // {
+        //     EndChild();
+        //     EndGroup();
+        //     return false;
+        // }
         draw_window = g.CurrentWindow; // Child window
         draw_window->DC.NavLayersActiveMaskNext |= (1 << draw_window->DC.NavLayerCurrent); // This is to ensure that EndChild() will display a navigation highlight so we can "enter" into it.
         draw_window->DC.CursorPos += style.FramePadding;
@@ -4263,6 +4266,10 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         state->Edited = false;
         state->BufCapacityA = buf_size;
         state->Flags = flags;
+
+        // TJP: I need the BBox of the edit field, so I can ensure it is visible
+        // when the iphone keyboard comes up.
+        state->BBox = total_bb;
 
         // Although we are active we don't prevent mouse from hovering other elements unless we are interacting right now with the widget.
         // Down the line we should have a cleaner library-wide concept of Selected vs Active.
