@@ -1,1 +1,1 @@
-/Users/tprepscius/Projects/eve2/Libraries/resources/imgui/../Makefile-template
+../../../resources/Makefile-template
