@@ -4100,12 +4100,13 @@ static void ImGui::UpdateMouseInputs()
     {
         // TJP: mouse down for events, not clicked, before it would generate a click
         // when the mouse was first pressed, but we want it when the use release the mouse
-        // io.MouseClicked[i] = io.MouseDown[i] && io.MouseDownDuration[i] < 0.0f;
-        io.MouseClicked[i] = !io.MouseDown[i] && io.MouseDownDuration[i] == 0.0f;
+         io.MouseClicked[i] = io.MouseDown[i] && io.MouseDownDuration[i] < 0.0f;
+//        io.MouseClicked[i] = !io.MouseDown[i] && io.MouseDownDuration[i] < 0.5f;
+//        io.MouseClicked[i] = !io.MouseDown[i] && (io.MouseDownDuration[i] >= 0 && io.MouseDownDuration[i] < 0.5f) && io.MouseDragMaxDistanceSqr[0] < 5*5;
         io.MouseClickedCount[i] = 0; // Will be filled below
         io.MouseReleased[i] = !io.MouseDown[i] && io.MouseDownDuration[i] >= 0.0f;
         io.MouseDownDurationPrev[i] = io.MouseDownDuration[i];
-        io.MouseDownDuration[i] = io.MouseDown[i] ? (io.MouseDownDuration[i] < 0.0f ? 0.0f : io.MouseDownDuration[i] + io.DeltaTime) : -1.0f;
+        io.MouseDownDuration[i] = io.MouseDown[i] ? (io.MouseDownDuration[i] < 0.0f ? io.DeltaTime: io.MouseDownDuration[i] + io.DeltaTime) : -1.0f;
         if (io.MouseClicked[i])
         {
             bool is_repeated_click = false;
