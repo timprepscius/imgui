@@ -4025,6 +4025,13 @@ static void InputTextReconcileUndoStateAfterUserCallback(ImGuiInputTextState* st
                 p[i] = ImStb::STB_TEXTEDIT_GETCHAR(state, first_diff + i);
 }
 
+static int ImGuiInputTextEx_UserFlags = 0;
+
+void ImGui::InputTextEx_SetUserFlags(int userFlags)
+{
+	ImGuiInputTextEx_UserFlags = userFlags;
+}
+
 // Edit a string of text
 // - buf_size account for the zero-terminator, so a buf_size of 6 can hold "Hello" but not "Hello!".
 //   This is so we can easily call InputText() on static arrays using ARRAYSIZE() and to match
@@ -4270,6 +4277,7 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         state->Edited = false;
         state->BufCapacityA = buf_size;
         state->Flags = flags;
+        state->UserFlags = ImGuiInputTextEx_UserFlags;
 
         // TJP: I need the BBox of the edit field, so I can ensure it is visible
         // when the iphone keyboard comes up.
