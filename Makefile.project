@@ -7,7 +7,7 @@ COPYTO := ../../sdk/lib
 
 PROJECTS := .
 
-ifneq (OSX,$(SYSNAME))
+ifeq (OSX,$(SYSNAME))
 	SRC += backends/imgui_impl_glfw.cpp
 endif
 
